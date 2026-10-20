@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langwerewolf"
+version = "0.1.0"
+description = "多智能体实时协同编排平台（狼人杀作为压力测试场景）"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.setuptools]
+# 只把真正的 Python 包纳入安装；web/ 是前端目录，不属于 Python 包
+packages = ["engine", "api"]
+
+# ============================================================
+# Ruff：linter + formatter
+# ============================================================
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["engine", "api", "tests"]
+extend-exclude = ["web"]  # 前端目录，D15 之后由 ESLint/Biome 接管
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle 错误
+    "F",   # pyflakes：未使用的 import / 未定义变量
+    "W",   # pycodestyle 警告
+    "I",   # import 排序：保证 engine 不会意外依赖 api
+    "UP",  # pyupgrade：自动升级到新语法
+    "B",   # bugbear：抓 def f(x=[]) 这类真 bug
+    "SIM", # 简化冗余逻辑
+    "C4",  # 简化推导式
+    "RUF", # ruff 自有规则
+]
+ignore = [
+    # 本项目注释与文档统一用中文，全角标点是正常的，不属于"歧义字符"问题
+    "RUF001", # 字符串中的全角标点
+    "RUF002", # docstring 中的全角标点
+    "RUF003", # 注释中的全角标点
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["engine", "api"]
+
+# ============================================================
+# Mypy：静态类型检查
+# ============================================================
+[tool.mypy]
+python_version = "3.13"
+files = ["engine", "api"]
+exclude = ["web/"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+
+# 核心域（规则引擎）强制严格。
+# 这是“语言模型不能改变游戏状态”在类型层面的保证：
+# 任何未标注类型的函数、任何隐式 Optional，都在这里被挡住。
+[[tool.mypy.overrides]]
+module = "engine.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# ============================================================
+# Pytest
+# ============================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]  # 免安装即可 import engine / api
+addopts = "-q --strict-markers"
+
+[tool.coverage.run]
+source = ["engine", "api"]
