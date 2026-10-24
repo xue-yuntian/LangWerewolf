@@ -41,7 +41,7 @@ def test_tie_triggers_pk_then_eliminates() -> None:
     first = {1: 2, 2: 3, 3: 2, 4: 3, 5: 4}
     # PK 台下是 1、4、5 三个人
     pk = {1: 2, 4: 2, 5: 3}
-    result = resolve_vote(state, ScriptVote({**first, **pk}))
+    result = resolve_vote(state, ScriptVote(first, pk))
 
     assert result.tied == (2, 3)
     assert result.re_vote is True
@@ -55,7 +55,7 @@ def test_pk_tie_again_means_nobody_out() -> None:
     state = make_state(LINEUP)
     first = {1: 2, 2: 3, 3: 2, 4: 3, 5: 4}
     pk = {1: 2, 4: 3, 5: None}  # 2 和 3 各 1 票
-    result = resolve_vote(state, ScriptVote({**first, **pk}))
+    result = resolve_vote(state, ScriptVote(first, pk))
 
     assert result.re_vote is True
     assert result.eliminated is None

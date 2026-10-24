@@ -81,7 +81,47 @@ def render_night(night: NightResult, state_players: object = None) -> list[str]:
 
     第二参数先留着（打印玩家身份时可能要），用不上就删掉签名里那一项。
     """
-    raise NotImplementedError("D5 待实现：render_night")
+    lines = []
+    lines.append(f"[第{night.index}夜]")
+    if not night.guard_target:
+        lines.append("守卫没有发动技能。")
+    else:
+        lines.append(f"守卫守了 {night.guard_target} 号玩家。")
+    lines.append(f"狼人对 {night.wolf_target} 号玩家动刀。")
+    if night.witch_saved:
+        lines.append("女巫将其救下")
+    elif night.poison_target:
+        lines.append(f"女巫没有救下，毒死了 {night.poison_target} 号玩家。")
+    else:
+        lines.append("女巫没有发动技能。")
+    if not night.seer_target:
+        lines.append("预言家没有发动技能。")
+    else:
+        verdict = "狼人" if night.seer_saw_wolf else "好人"
+        lines.append(f"预言家查验了 {night.seer_target} 号玩家：{verdict}")
+    if not night.deaths:
+        lines.append("平安夜。")
+    else:
+        lines.append(f"今晚 {', '.join(str(death.pid) for death in night.deaths)}号玩家含恨离世。")
+    return lines
+
+
+def _format_ballots(ballots: dict[int, int | None]) -> str:
+    """把票型渲染成 "1->4  2->弃" 这样的一行。"""
+    return "  ".join(
+        f"{voter}->{'弃' if target is None else target}"
+        for voter, target in sorted(ballots.items())
+    )
+
+
+def _format_top(tally: dict[int, int], title: str) -> str:
+    """渲染最高票。tally 为空表示全员弃票。"""
+    if not tally:
+        return f"{title}：无人得票"
+    best = max(tally.values())
+    top = sorted(pid for pid, n in tally.items() if n == best)
+    names = "、".join(f"{pid} 号（{best} 票）" for pid in top)
+    return f"{title}：{names}"
 
 
 def render_vote(vote: VoteResult) -> list[str]:
@@ -92,7 +132,23 @@ def render_vote(vote: VoteResult) -> list[str]:
         · 发生平票时，哪些人进了 PK、PK 的票型如何
         · 最终谁出局；无人出局要明确写出来（而不是什么都不打）
     """
-    raise NotImplementedError("D5 待实现：render_vote")
+    lines = [f"[{vote.label}] 投票：{_format_ballots(vote.ballots)}"]
+    lines.append(_format_top(vote.tally, "最高票"))
+
+    if vote.re_vote:
+        tied = "、".join(f"{pid} 号" for pid in vote.tied)
+        lines.append(f"平票：{tied}，台下 PK 重投")
+        lines.append(f"PK 投票：{_format_ballots(vote.pk_ballots)}")
+        lines.append(_format_top(vote.pk_tally, "PK 最高票"))
+
+    if vote.eliminated is None:
+        lines.append("最终：无人出局")
+    else:
+        tally = vote.pk_tally if vote.re_vote else vote.tally
+        votes = tally.get(vote.eliminated, 0)
+        lines.append(f"最终：{vote.eliminated} 号出局（{votes} 票）")
+
+    return lines
 
 
 def render_summary(result: GameResult) -> list[str]:
@@ -101,7 +157,12 @@ def render_summary(result: GameResult) -> list[str]:
     开头：板子名、种子、每个座位号的真实身份（调试用，D12 之后会藏起来）
     结尾：胜方、共几天、死亡顺序
     """
-    raise NotImplementedError("D5 待实现：render_summary")
+    lines = []
+    lines.append(f"{result.state.board.id}{result.state.players}")
+    lines.append(f"游戏结束，{result.winner}方获胜，历时{result.days}天。")
+    lines.append(f"以下玩家遗憾出局{', '.join(str(death) for death in result.state.deaths)}。")
+
+    return lines
 
 
 def main(argv: Sequence[str] | None = None) -> int:

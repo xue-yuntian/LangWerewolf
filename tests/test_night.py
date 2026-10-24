@@ -12,13 +12,14 @@ from engine.roles import Roles
 from engine.state import DeathCause, RuleViolation
 from tests.support import ScriptNight, make_state, no_shot
 
-# 常用阵容：1 狼、2 民、3 守卫、4 女巫、5 猎人
+# 常用阵容：1 狼、2 民、3 守卫、4 女巫、5 猎人、6 预言家
 BASE = {
     1: Roles.WOLF,
     2: Roles.VILLAGER,
     3: Roles.GUARD,
     4: Roles.WITCH,
     5: Roles.HUNTER,
+    6: Roles.SEER,
 }
 
 

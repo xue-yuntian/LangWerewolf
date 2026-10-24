@@ -78,12 +78,25 @@ class ScriptNight:
 
 
 class ScriptVote:
-    """按预设映射投票；映射里没有的人弃票。"""
+    """按预设映射投票；映射里没有的人弃票。
 
-    def __init__(self, mapping: dict[int, int | None]) -> None:
+    传入 pk_mapping 时，同一个人第二次被问到（PK 轮）改用 pk_mapping。
+    这样首轮票型和 PK 票型可以分开写，不会互相覆盖。
+    """
+
+    def __init__(
+        self,
+        mapping: dict[int, int | None],
+        pk_mapping: dict[int, int | None] | None = None,
+    ) -> None:
         self.mapping = mapping
+        self.pk_mapping = pk_mapping
+        self.seen: set[int] = set()
 
     def vote(self, state: GameState, voter: int) -> int | None:
+        if voter in self.seen:
+            return (self.pk_mapping or self.mapping).get(voter)
+        self.seen.add(voter)
         return self.mapping.get(voter)
 
 
