@@ -11,6 +11,7 @@ from engine.board import BOARDS_DIR, load_board
 from engine.game import play_game
 from engine.policy import RandomPolicy
 from engine.roles import Roles
+from engine.sim import main
 from engine.win import Winner
 from tests.support import make_state, seed
 
@@ -138,6 +139,9 @@ def test_same_seed_reproduces_same_game() -> None:
     }
 
 
-@pytest.mark.skip(reason="等 sim.py 的 main 实现后打开")
-def test_sim_cli_runs() -> None:
+def test_sim_cli_runs(capsys: pytest.CaptureFixture[str]) -> None:
     """CLI 冒烟测试：`python -m engine.sim 9p --seed 1` 返回 0 且有输出。"""
+    assert main(["9p", "--seed", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "第1夜" in out
+    assert "胜" in out
