@@ -176,6 +176,9 @@ def resolve_night(
         state.witch_poison_used = True
     # 无论今晚有没有守人，都要记住；None 表示空守，就不会误判"连守"
     state.last_guarded = guard_target
+    # 记下被验过的人，策略层据此避免重复验；写入只发生在引擎侧
+    if seer_target is not None:
+        state.player(seer_target).checked = True
 
     return NightResult(
         index=state.night,

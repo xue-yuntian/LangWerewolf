@@ -61,6 +61,8 @@ class Player:
     pid: int
     role: Roles
     alive: bool = True
+    # 是否已被预言家查验过。由 night.py 结算时写入，策略层只读
+    checked: bool = False
 
     @property
     def faction(self) -> Faction:
@@ -114,6 +116,10 @@ class GameState:
         return [
             pid for pid, p in sorted(self.players.items()) if p.alive and p.faction is faction
         ]
+
+    def checked_ids(self) -> list[int]:
+        """预言家查验过的玩家列表，一般情况下不能重复查验，避免模型幻觉导致的无效操作。"""
+        return [pid for pid, p in sorted(self.players.items()) if p.checked]
 
     def wolves_alive(self) -> list[int]:
         return self.alive_of(Faction.WOLF)
