@@ -1,0 +1,15 @@
+{
+  "id": "9p",
+  "name": "9人快速局",
+  "roles": {
+    "wolf": 3,
+    "villager": 3,
+    "seer": 1,
+    "witch": 1,
+    "hunter": 1
+  },
+  "options": {
+    "sheriff": false,
+    "win_condition": "slaughter_side"
+  }
+}

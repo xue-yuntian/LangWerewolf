@@ -7,7 +7,10 @@ name = "langwerewolf"
 version = "0.1.0"
 description = "多智能体实时协同编排平台（狼人杀作为压力测试场景）"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    # D2 的板子配置用 Pydantic 做"形状校验"（D15 的 FastAPI 也靠它）
+    "pydantic>=2.7",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -50,7 +53,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["engine", "api"]
+known-first-party = ["engine", "api", "tests"]
 
 # ============================================================
 # Mypy：静态类型检查
