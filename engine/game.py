@@ -1,8 +1,12 @@
 """游戏主循环：夜 -> 查胜负 -> 昼 -> 查胜负 -> 夜……直到分出胜负。
 
-这是 D4 的终点：不做花活，只保证"一局能从头走到尾"。
-D5 会把这里的策略换成随机机器人 + CLI 播放器，D6 再把过程包成事件流，
-D20 会把 while 循环拆成可暂停的 step()。今天先让它跑通。
+D4 让它能跑通，D6 让它**每一件发生的事都留下一条带序号的事件**。
+事件是 D12 的 prompt 输入、D16 的 SSE 推送内容、D23 的复盘时间轴。
+
+本模块不做的事：
+  · 不实现事件->状态的重放（见 engine/events.py 顶部的取舍说明）
+  · 不实现警长竞选（D8）
+  · 不做发言（D8 / D12 才有数据源）
 """
 
 from dataclasses import dataclass, field
@@ -10,7 +14,9 @@ from random import Random
 from typing import Protocol
 
 from engine.board import Board
+from engine.events import VIS_GOD, VIS_WOLVES, EventKind, EventLog, vis_pid
 from engine.night import NightChooser, NightResult, resolve_night
+from engine.roles import Roles
 from engine.state import Death, DeathCause, GameState, apply_deaths, create_state
 from engine.vote import VoteChooser, VoteResult, resolve_vote
 from engine.win import Winner, check_winner
@@ -35,17 +41,122 @@ class GamePolicy(NightChooser, VoteChooser, Protocol):
 
 @dataclass
 class GameResult:
-    """一局的结果。D5 的 CLI 播放器、D11 的批量仿真都消费它。"""
+    """一局的结果。
+
+    nights / votes 是"结构化摘要"（D11 统计、CLI 渲染用），
+    events 是"逐条发生的事实"（D12 prompt、D16 推送、D23 复盘用）。
+    两者不是重复：前者方便聚合，后者保证时序和可见性。
+    """
 
     winner: Winner
     state: GameState
     nights: list[NightResult] = field(default_factory=list)
     votes: list[VoteResult] = field(default_factory=list)
-    log: list[str] = field(default_factory=list)
+    events: EventLog = field(default_factory=EventLog)
 
     @property
     def days(self) -> int:
         return self.state.day
+
+
+# ---------------------------------------------------------------------------
+# 事件发射：把已有的结构化结果"拆"成事件，不改动规则引擎
+# ---------------------------------------------------------------------------
+
+
+def _holder_pid(state: GameState, role: Roles) -> int | None:
+    """某个唯一身份的持有者（不管死活）。
+
+    用它在事件上标"只有这个人能看到"。为什么不传 pid：resolve_night 只回传
+    "做了什么"，不回传"是谁做的"，从 state 反查比改 night.py 的返回值便宜得多。
+    """
+    holders = state.role_holders(role)
+    return holders[0] if holders else None
+
+
+def _emit_deaths(events: EventLog, deaths: list[Death], label: str) -> None:
+    """死亡是全场可见事件——所有人都看到谁出局了。"""
+    for death in deaths:
+        events.emit(EventKind.DEATH, label, pid=death.pid, cause=death.cause.value)
+
+
+def _emit_night(events: EventLog, night: NightResult, state: GameState) -> None:
+    """把一夜拆成事件。顺序即日志顺序，复盘直接按它渲染时间轴。"""
+    label = night.label
+    events.emit(EventKind.NIGHT_START, label)
+
+    if night.guard_target is not None:
+        guard = _holder_pid(state, Roles.GUARD)
+        events.emit(
+            EventKind.GUARD,
+            label,
+            target=night.guard_target,
+            visible_to=vis_pid(guard) if guard is not None else VIS_GOD,
+        )
+
+    if night.wolf_target is not None:
+        # 狼刀只有狼队知道
+        events.emit(
+            EventKind.WOLF_KILL, label, target=night.wolf_target, visible_to=VIS_WOLVES
+        )
+
+    witch = _holder_pid(state, Roles.WITCH)
+    witch_vis = vis_pid(witch) if witch is not None else VIS_GOD
+
+    if night.witch_saved:
+        events.emit(
+            EventKind.WITCH_SAVE,
+            label,
+            target=night.wolf_target,
+            visible_to=witch_vis,
+        )
+    if night.poison_target is not None:
+        events.emit(
+            EventKind.WITCH_POISON,
+            label,
+            target=night.poison_target,
+            visible_to=witch_vis,
+        )
+
+    if night.seer_target is not None:
+        seer = _holder_pid(state, Roles.SEER)
+        events.emit(
+            EventKind.SEER_CHECK,
+            label,
+            target=night.seer_target,
+            saw_wolf=night.seer_saw_wolf,
+            visible_to=vis_pid(seer) if seer is not None else VIS_GOD,
+        )
+
+    _emit_deaths(events, list(night.deaths), label)
+
+
+def _emit_vote(events: EventLog, vote: VoteResult) -> None:
+    """把一天的投票拆成事件。"""
+    label = vote.label
+    events.emit(EventKind.DAY_START, label)
+
+    # 每人一票，前端画投票矩阵直接读这些
+    for voter, target in sorted(vote.ballots.items()):
+        events.emit(EventKind.VOTE, label, voter=voter, target=target)
+
+    # PK 重投单独标 pk=True，否则和第一轮票混在一起看不出哪轮是哪轮
+    for voter, target in sorted(vote.pk_ballots.items()):
+        events.emit(EventKind.VOTE, label, voter=voter, target=target, pk=True)
+
+    events.emit(
+        EventKind.VOTE_RESULT,
+        label,
+        tally={str(pid): n for pid, n in vote.tally.items()},
+        tied=list(vote.tied),
+        re_vote=vote.re_vote,
+        eliminated=vote.eliminated,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 主循环
+# ---------------------------------------------------------------------------
 
 
 def play_game(
@@ -69,29 +180,45 @@ def play_game(
 
     state = create_state(board, rng)
     result = GameResult(winner=Winner.GOOD, state=state)  # winner 会被覆盖
+    events = result.events
+
+    # 身份表是上帝视角，绝不能进公共记录（D12 会按 visible_to 过滤）
+    events.emit(
+        EventKind.GAME_START,
+        "",
+        board=board.id,
+        players={str(pid): p.role.value for pid, p in sorted(state.players.items())},
+        visible_to=VIS_GOD,
+    )
+
+    # 记录猎人开枪的 (谁开, 打谁)。apply_deaths 内部调用 shot_chooser，
+    # 在这里截一份，就能在不改 state.py 的前提下发出 HUNTER_SHOT 事件。
+    shots: list[tuple[int, int | None]] = []
 
     def shot_chooser(hunter: int) -> int | None:
-        # 猎人的开枪对象由策略决定；apply_deaths 会用队列处理连环枪
-        return policy.hunter_shot(state, hunter)
+        target = policy.hunter_shot(state, hunter)
+        shots.append((hunter, target))
+        return target
 
-    def record_deaths(deaths: list[Death], label: str) -> None:
-        for death in deaths:
-            result.log.append(f"{label}：{death.pid}号 出局（{death.cause.value}）")
+    def drain_shots(label: str) -> None:
+        while shots:
+            hunter, target = shots.pop(0)
+            events.emit(EventKind.HUNTER_SHOT, label, hunter=hunter, target=target)
 
     winner: Winner | None = check_winner(state)
 
     while winner is None:
         if state.day >= max_days:
             raise RuntimeError(
-                f"超过 {max_days} 天仍未分出胜负（存活 {state.alive_count()} 人），策略可能陷入循环"
+                f"超过 {max_days} 天仍未分出胜负（存活 {state.alive_count()} 人），"
+                f"策略可能陷入循环"
             )
 
         # ---- 夜晚 ----
         night = resolve_night(state, policy, shot_chooser)
         result.nights.append(night)
-        record_deaths(list(night.deaths), night.label)
-        if not night.deaths:
-            result.log.append(f"{night.label}：平安夜")
+        _emit_night(events, night, state)
+        drain_shots(night.label)
 
         winner = check_winner(state)
         if winner is not None:
@@ -100,18 +227,17 @@ def play_game(
         # ---- 白天投票 ----
         vote = resolve_vote(state, policy)
         result.votes.append(vote)
-        if vote.re_vote:
-            result.log.append(f"{vote.label}：平票 PK，平票者 {vote.tied}")
-        if vote.eliminated is None:
-            result.log.append(f"{vote.label}：无人出局")
-        else:
+        _emit_vote(events, vote)
+
+        if vote.eliminated is not None:
             deaths = apply_deaths(
                 state,
                 {vote.eliminated: DeathCause.VOTE},
                 vote.label,
                 shot_chooser,
             )
-            record_deaths(deaths, vote.label)
+            _emit_deaths(events, deaths, vote.label)
+            drain_shots(vote.label)
 
         winner = check_winner(state)
 
@@ -119,5 +245,5 @@ def play_game(
         raise RuntimeError("胜负判定异常：循环退出但没有胜方")
 
     result.winner = winner
-    result.log.append(f"结束：{winner.value} 胜，共 {state.day} 天")
+    events.emit(EventKind.GAME_OVER, "", winner=winner.value, days=state.day)
     return result

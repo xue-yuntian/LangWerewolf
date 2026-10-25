@@ -24,7 +24,7 @@
 play_game() 已经返回 GameResult，里面有：
     result.nights  list[NightResult]  每一夜干了什么
     result.votes   list[VoteResult]   每一天的票型和结果
-    result.log     list[str]          引擎写的流水文本
+    result.events  EventLog           逐条发生的事实（D6 起取代原来的 log 字段）
     result.winner  Winner
     result.state   GameState          最终状态（能拿到每个玩家的真实身份）
 
