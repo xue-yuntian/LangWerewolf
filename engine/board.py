@@ -151,8 +151,7 @@ def _collect_warnings(board: Board) -> list[str]:
     ratio = board.faction_counts()[Faction.WOLF] / total
     if not WOLF_RATIO_MIN <= ratio <= WOLF_RATIO_MAX:
         messages.append(
-            f"狼人占比 {ratio:.0%} 不在 {WOLF_RATIO_MIN:.0%}-{WOLF_RATIO_MAX:.0%}，"
-            f"平衡性可能有问题"
+            f"狼人占比 {ratio:.0%} 不在 {WOLF_RATIO_MIN:.0%}-{WOLF_RATIO_MAX:.0%}，平衡性可能有问题"
         )
     return messages
 

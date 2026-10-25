@@ -19,8 +19,7 @@ BASE_VOTE_WEIGHT = 1
 class VoteChooser(Protocol):
     """每个投票者投给谁。None 表示弃票。"""
 
-    def vote(self, state: GameState, voter: int) -> int | None:
-        ...
+    def vote(self, state: GameState, voter: int) -> int | None: ...
 
 
 @dataclass(frozen=True)
@@ -55,9 +54,7 @@ def _weight(state: GameState, voter: int) -> int:
     return BASE_VOTE_WEIGHT
 
 
-def _collect(
-    state: GameState, chooser: VoteChooser, voters: list[int]
-) -> dict[int, int | None]:
+def _collect(state: GameState, chooser: VoteChooser, voters: list[int]) -> dict[int, int | None]:
     """收集一轮投票。当场校验目标合法性——非法票直接抛，不静默丢弃。"""
     ballots: dict[int, int | None] = {}
     for voter in voters:

@@ -84,9 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m engine.sim",
         description="跑一局狼人杀，把过程打印成人能读的文本",
     )
-    parser.add_argument(
-        "board_id", help="板子 id，如 9p、12p（12p 带警长，D8 前会报错）"
-    )
+    parser.add_argument("board_id", help="板子 id，如 9p、12p（12p 带警长，D8 前会报错）")
     parser.add_argument(
         "--seed",
         type=int,
@@ -141,8 +139,7 @@ def render_night(night: NightResult, *, has_guard: bool = True) -> list[str]:
         lines.append("平安夜。")
     else:
         deaths = "、".join(
-            f"{death.pid}号（{_cause_text(death.cause.value)}）"
-            for death in night.deaths
+            f"{death.pid}号（{_cause_text(death.cause.value)}）" for death in night.deaths
         )
         lines.append(f"今晚 {deaths} 出局。")
     return lines

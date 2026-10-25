@@ -113,9 +113,7 @@ class GameState:
 
     def alive_of(self, faction: Faction) -> list[int]:
         """某个阵营的存活玩家。屠边判定靠它。"""
-        return [
-            pid for pid, p in sorted(self.players.items()) if p.alive and p.faction is faction
-        ]
+        return [pid for pid, p in sorted(self.players.items()) if p.alive and p.faction is faction]
 
     def checked_ids(self) -> list[int]:
         """预言家查验过的玩家列表，一般情况下不能重复查验，避免模型幻觉导致的无效操作。"""

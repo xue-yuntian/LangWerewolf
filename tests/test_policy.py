@@ -25,9 +25,7 @@ def test_pick_returns_none_on_empty() -> None:
 
 def test_guard_never_repeats_last_guarded() -> None:
     """连续两夜：第二夜不能守第一夜守过的人。"""
-    state = make_state(
-        {1: Roles.WOLF, 2: Roles.GUARD, 3: Roles.VILLAGER, 4: Roles.VILLAGER}
-    )
+    state = make_state({1: Roles.WOLF, 2: Roles.GUARD, 3: Roles.VILLAGER, 4: Roles.VILLAGER})
     policy = RandomPolicy(seed(0))
 
     first = policy.choose_guard(state)
@@ -42,9 +40,7 @@ def test_guard_never_repeats_last_guarded() -> None:
 
 def test_witch_never_poisons_self() -> None:
     """女巫不能毒自己——跑 200 次都不该出现自己的座位号。"""
-    state = make_state(
-        {1: Roles.WOLF, 2: Roles.WITCH, 3: Roles.VILLAGER, 4: Roles.VILLAGER}
-    )
+    state = make_state({1: Roles.WOLF, 2: Roles.WITCH, 3: Roles.VILLAGER, 4: Roles.VILLAGER})
     policy = RandomPolicy(seed(0))
 
     used = 0
@@ -58,9 +54,7 @@ def test_witch_never_poisons_self() -> None:
 
 def test_seer_never_checks_self() -> None:
     """预言家不能验自己，也不能重复验已经验过的人。"""
-    state = make_state(
-        {1: Roles.WOLF, 2: Roles.SEER, 3: Roles.VILLAGER, 4: Roles.VILLAGER}
-    )
+    state = make_state({1: Roles.WOLF, 2: Roles.SEER, 3: Roles.VILLAGER, 4: Roles.VILLAGER})
     state.player(1).checked = True  # 1 号已经被验过
     policy = RandomPolicy(seed(0))
 
@@ -95,9 +89,7 @@ def test_hunter_never_shoots_self() -> None:
 
 def test_witch_does_not_save_and_poison_same_night() -> None:
     """一晚只能用一瓶药：决定救人的同一夜不能再毒。"""
-    state = make_state(
-        {1: Roles.WOLF, 2: Roles.WITCH, 3: Roles.VILLAGER, 4: Roles.VILLAGER}
-    )
+    state = make_state({1: Roles.WOLF, 2: Roles.WITCH, 3: Roles.VILLAGER, 4: Roles.VILLAGER})
     policy = RandomPolicy(seed(0))
 
     for _ in range(100):

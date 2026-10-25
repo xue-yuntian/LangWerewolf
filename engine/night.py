@@ -93,9 +93,7 @@ def resolve_night(
             _require_alive(state, guard_target, "守卫守护")
             # 规则：不能连续两晚守同一个人。否则守卫能把自己或核心神职锁死。
             if guard_target == state.last_guarded:
-                raise RuleViolation(
-                    f"{guard_target}号 上一晚已被守护，守卫不能连续两晚守同一人"
-                )
+                raise RuleViolation(f"{guard_target}号 上一晚已被守护，守卫不能连续两晚守同一人")
             # 允许守自己——这是标准规则，守卫首夜守自己是常见打法
 
     # ---------------- 2. 狼人 ----------------

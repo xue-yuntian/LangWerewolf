@@ -65,9 +65,7 @@ def play_game(
     # 警长竞选是 D8 的内容。这里显式拒绝，而不是静默忽略，
     # 否则 12 人局会"看起来能跑但少了整个上警流程"，属于最难查的那种 bug。
     if board.options.sheriff:
-        raise NotImplementedError(
-            "警长竞选在 D8 实现。现在请用 sheriff=false 的板子（如 9p）"
-        )
+        raise NotImplementedError("警长竞选在 D8 实现。现在请用 sheriff=false 的板子（如 9p）")
 
     state = create_state(board, rng)
     result = GameResult(winner=Winner.GOOD, state=state)  # winner 会被覆盖
@@ -85,8 +83,7 @@ def play_game(
     while winner is None:
         if state.day >= max_days:
             raise RuntimeError(
-                f"超过 {max_days} 天仍未分出胜负（存活 {state.alive_count()} 人），"
-                f"策略可能陷入循环"
+                f"超过 {max_days} 天仍未分出胜负（存活 {state.alive_count()} 人），策略可能陷入循环"
             )
 
         # ---- 夜晚 ----
