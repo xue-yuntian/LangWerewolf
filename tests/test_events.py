@@ -47,9 +47,7 @@ def test_same_seed_produces_same_events() -> None:
     second = _play(7)
 
     def snapshot(game: GameResult) -> list[tuple[str, str, str, dict[str, object]]]:
-        return [
-            (e.kind.value, e.label, e.visible_to, dict(e.payload)) for e in game.events
-        ]
+        return [(e.kind.value, e.label, e.visible_to, dict(e.payload)) for e in game.events]
 
     assert snapshot(first) == snapshot(second)
 
@@ -86,9 +84,7 @@ def test_every_death_has_event() -> None:
 
     death_events = [e for e in game.events if e.kind is EventKind.DEATH]
     assert len(death_events) == len(game.state.deaths)
-    assert {e.payload["pid"] for e in death_events} == {
-        death.pid for death in game.state.deaths
-    }
+    assert {e.payload["pid"] for e in death_events} == {death.pid for death in game.state.deaths}
 
 
 def test_for_viewer_filters_private_events() -> None:

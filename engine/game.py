@@ -96,9 +96,7 @@ def _emit_night(events: EventLog, night: NightResult, state: GameState) -> None:
 
     if night.wolf_target is not None:
         # 狼刀只有狼队知道
-        events.emit(
-            EventKind.WOLF_KILL, label, target=night.wolf_target, visible_to=VIS_WOLVES
-        )
+        events.emit(EventKind.WOLF_KILL, label, target=night.wolf_target, visible_to=VIS_WOLVES)
 
     witch = _holder_pid(state, Roles.WITCH)
     witch_vis = vis_pid(witch) if witch is not None else VIS_GOD
@@ -210,8 +208,7 @@ def play_game(
     while winner is None:
         if state.day >= max_days:
             raise RuntimeError(
-                f"超过 {max_days} 天仍未分出胜负（存活 {state.alive_count()} 人），"
-                f"策略可能陷入循环"
+                f"超过 {max_days} 天仍未分出胜负（存活 {state.alive_count()} 人），策略可能陷入循环"
             )
 
         # ---- 夜晚 ----

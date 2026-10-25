@@ -219,9 +219,7 @@ class EventLog:
 
     def to_jsonl(self) -> str:
         """一行一条事件。选 JSONL 而不是数组，是因为它和 D16 的 SSE 一一对应。"""
-        return "\n".join(
-            json.dumps(e.to_dict(), ensure_ascii=False) for e in self._events
-        )
+        return "\n".join(json.dumps(e.to_dict(), ensure_ascii=False) for e in self._events)
 
     @classmethod
     def from_jsonl(cls, text: str) -> EventLog:
