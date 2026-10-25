@@ -4,10 +4,12 @@
 所有说明性文本（身份能力、术语表）都放在本模块，模型的行为约束只在这里维护一份。
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from engine.roles import ROLE_REGISTRY, Roles
+from engine.events import VIS_ALL, VIS_WOLVES, Event, EventKind, EventLog, vis_pid
+from engine.roles import ROLE_REGISTRY, Faction, Roles
+from engine.state import GameState
 
 # 身份说明直接喂给模型，写的是"能做什么 + 规则限制 + 白天怎么打"
 roles_ability: dict[Roles, str] = {}
@@ -143,6 +145,176 @@ def _join_lines(lines: Iterable[str]) -> str:
     return "\n".join(f"- {line}" for line in lines)
 
 
+# ---------------------------------------------------------------------------
+# 死因中文名
+# ---------------------------------------------------------------------------
+
+# sim.py 里原本有一份私有的 _CAUSE_ZH，这里是唯一应该存在的版本。
+# sim.py 那份改成 from engine.view import cause_text 即可，别留两份。
+_CAUSE_TEXT: dict[str, str] = {
+    "wolf_kill": "狼刀",
+    "poison": "毒杀",
+    "vote": "投票",
+    "shot": "开枪",
+}
+
+
+def cause_text(cause: str) -> str:
+    """死因的中文名。未知死因原样返回，方便以后加新死因。"""
+    return _CAUSE_TEXT.get(cause, cause)
+
+
+# ---------------------------------------------------------------------------
+# payload 取值：payload 是 Mapping[str, object]，直接索引会污染整条链的类型
+# ---------------------------------------------------------------------------
+
+
+def _get_int(payload: Mapping[str, object], key: str) -> int | None:
+    """取整数字段。
+
+    必须排掉 bool：Python 里 isinstance(True, int) 为 True，
+    不排除的话 True 会被当成 1 号玩家。
+    """
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _get_bool(payload: Mapping[str, object], key: str) -> bool | None:
+    value = payload.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _get_str(payload: Mapping[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    return value if isinstance(value, str) else None
+
+
+# ---------------------------------------------------------------------------
+# 事件 -> 一行中文
+# ---------------------------------------------------------------------------
+
+
+def render_event(event: Event) -> str | None:
+    """把一条事件渲染成一行中文。
+
+    返回 None 表示这条事件不产生玩家可见的文本
+    （GAME_START / NIGHT_START / DAY_START / GAME_OVER 都是这类）。
+    """
+    payload = event.payload
+    label = event.label
+
+    if event.kind is EventKind.GUARD:
+        target = _get_int(payload, "target")
+        return f"{label}：守卫守护了 {target} 号" if target is not None else None
+
+    if event.kind is EventKind.WOLF_KILL:
+        target = _get_int(payload, "target")
+        return f"{label}：狼队决定刀 {target} 号" if target is not None else None
+
+    if event.kind is EventKind.WITCH_SAVE:
+        target = _get_int(payload, "target")
+        return f"{label}：女巫用解药救下 {target} 号" if target is not None else None
+
+    if event.kind is EventKind.WITCH_POISON:
+        target = _get_int(payload, "target")
+        return f"{label}：女巫毒死 {target} 号" if target is not None else None
+
+    if event.kind is EventKind.SEER_CHECK:
+        target = _get_int(payload, "target")
+        if target is None:
+            return None
+        verdict = "狼人" if _get_bool(payload, "saw_wolf") else "好人"
+        return f"{label}：查验 {target} 号 → {verdict}"
+
+    if event.kind is EventKind.DEATH:
+        dead_pid = _get_int(payload, "pid")
+        if dead_pid is None:
+            return None
+        cause = cause_text(_get_str(payload, "cause") or "")
+        return f"{label}：{dead_pid} 号出局（{cause}）"
+
+    if event.kind is EventKind.HUNTER_SHOT:
+        hunter = _get_int(payload, "hunter")
+        target = _get_int(payload, "target")
+        if hunter is None or target is None:
+            return None
+        return f"{label}：{hunter} 号猎人开枪，带走 {target} 号"
+
+    if event.kind is EventKind.VOTE:
+        voter = _get_int(payload, "voter")
+        target = _get_int(payload, "target")
+        if voter is None:
+            return None
+        if target is None:
+            return f"{label}：{voter} 号弃票"
+        suffix = "（PK 轮）" if _get_bool(payload, "pk") else ""
+        return f"{label}：{voter} 号投给 {target} 号{suffix}"
+
+    if event.kind is EventKind.VOTE_RESULT:
+        eliminated = _get_int(payload, "eliminated")
+        if eliminated is None:
+            return f"{label}：无人出局"
+        return f"{label}：{eliminated} 号被投票出局"
+
+    if event.kind is EventKind.SPEECH:
+        # D12 才会发这条。约定 payload 用 text 字段。
+        return _get_str(payload, "text")
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 事件流 -> 一个玩家的(私有历史, 公开历史)
+# ---------------------------------------------------------------------------
+
+
+def split_history(
+    events: EventLog,
+    pid: int,
+    *,
+    is_wolf: bool = False,
+) -> tuple[list[str], list[str]]:
+    """切出 (private_lines, public_lines)。
+
+    做法是**差集**：
+        visible = 他作为观众能看到的所有事件
+        public  = 所有人都能看到的事件
+        private = visible - public
+
+    两个关键点：
+      1. 差集必须按 seq 做。Event 的 payload 是 dict，不可哈希，
+         set(events) 会抛 TypeError；而用 == 比较又是 O(n*m)。
+      2. is_wolf=True 时要把 "wolves" 加进观众集合。WOLF_KILL 的
+         visible_to 是 "wolves"，和 "pid:N" 匹配不上——只传 pid 的话，
+         狼会看不到自己队伍昨晚刀了谁。
+    """
+    audiences: set[str] = {VIS_ALL, vis_pid(pid)}
+    if is_wolf:
+        audiences.add(VIS_WOLVES)
+
+    visible = events.for_audiences(audiences)
+    public = events.for_audiences({VIS_ALL})
+    public_seqs = {event.seq for event in public}
+
+    private_lines: list[str] = []
+    for event in visible:
+        if event.seq in public_seqs:
+            continue
+        text = render_event(event)
+        if text is not None:
+            private_lines.append(text)
+
+    public_lines: list[str] = []
+    for event in public:
+        text = render_event(event)
+        if text is not None:
+            public_lines.append(text)
+
+    return private_lines, public_lines
+
+
 @dataclass(frozen=True)
 class PlayerView:
     pid: int
@@ -181,6 +353,54 @@ class PlayerView:
         if self.notes:
             blocks.append("以下是你自己的笔记：\n" + _join_lines(self.notes))
         if self.last_speeches:
-            blocks.append("以下是你上一轮的发言：\n" + _join_lines(self.last_speeches))
+            blocks.append("以下是本轮已经发生过的发言：\n" + _join_lines(self.last_speeches))
         blocks.append("注意，你的发言不能冗长，必须简明说明你想讲出的逻辑和结论。没有有效信息时可以选择过。")
         return "\n\n".join(blocks)
+
+
+def view_for(
+    state: GameState,
+    events: EventLog,
+    pid: int,
+    *,
+    personality: str = "",
+    notes: list[str] | None = None,
+    last_speeches: list[str] | None = None,
+) -> PlayerView:
+    """把引擎状态压缩成"pid 这一刻知道什么"。
+
+    只读，不回写 state。这是全项目唯一的信息出口——D12 拼 prompt
+    只允许从这里取数据，不允许直接读 GameState，否则私有信息会漏。
+    """
+    role = state.player(pid).role
+    is_wolf = ROLE_REGISTRY[role].faction is Faction.WOLF
+
+    # 狼队友：包含已死的狼。狼从开局就知道彼此身份，队友死了也仍然知道。
+    teammates = (
+        [other for other in state.role_holders(Roles.WOLF) if other != pid]
+        if is_wolf
+        else []
+    )
+
+    # 死者要带上"第几夜 + 死因"。只给座位号不够——模型要靠死因推理
+    # （被毒死的不能开枪、被刀死的可能被救过）。
+    dead = [
+        (death.pid, f"{death.label} {cause_text(death.cause.value)}")
+        for death in state.deaths
+    ]
+
+    private_lines, public_lines = split_history(events, pid, is_wolf=is_wolf)
+
+    return PlayerView(
+        pid=pid,
+        roles=role,
+        day=state.day,
+        alive=state.alive_ids(),
+        dead=dead,
+        teammates=teammates,
+        private_lines=private_lines,
+        public_lines=public_lines,
+        last_speeches=list(last_speeches or []),
+        personality=personality,
+        notes=list(notes or []),
+    )

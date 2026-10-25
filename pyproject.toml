@@ -22,7 +22,7 @@ dev = [
 
 [tool.setuptools]
 # 只把真正的 Python 包纳入安装；web/ 是前端目录，不属于 Python 包
-packages = ["engine", "api"]
+packages = ["engine", "api", "agents"]
 
 # ============================================================
 # Ruff：linter + formatter

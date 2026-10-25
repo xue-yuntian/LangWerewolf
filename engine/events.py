@@ -42,7 +42,7 @@ viewer 的取值约定：
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Container, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -203,17 +203,34 @@ class EventLog:
         """上帝视角：全部事件。"""
         return list(self._events)
 
+    def for_audiences(self, audiences: Container[str]) -> list[Event]:
+        """按一组观众身份过滤。
+
+        为什么参数是集合而不是单值：一条事件可能同时属于多类观众。
+        例如 3 号是狼，他的观众集合是 {"all", "wolves", "pid:3"}——
+        只传 "pid:3" 会漏掉 visible_to="wolves" 的 WOLF_KILL 事件，
+        结果就是 AI 狼完全不记得自己队伍昨晚刀了谁。
+
+        传 VIS_GOD 表示上帝视角，返回全部。
+        """
+        if VIS_GOD in audiences:
+            return list(self._events)
+        return [e for e in self._events if e.visible_to in audiences]
+
     def for_viewer(self, viewer: str) -> list[Event]:
-        """按可见性过滤。
+        """单观众的便捷包装（保留给测试和简单场景）。
 
         viewer="all"     -> 只有公共事件（D12 给所有 AI 的公共记录）
         viewer="god"     -> 全部
         viewer="wolves"  -> 公共 + 狼队私有
         viewer="pid:3"   -> 公共 + 3 号私有
+
+        注意：狼玩家要用 for_audiences({VIS_ALL, VIS_WOLVES, vis_pid(3)})，
+        单传 vis_pid(3) 看不到狼队事件。
         """
         if viewer == VIS_GOD:
             return list(self._events)
-        return [e for e in self._events if e.visible_to in (VIS_ALL, viewer)]
+        return self.for_audiences({VIS_ALL, viewer})
 
     # ---------------- 序列化 ----------------
 
