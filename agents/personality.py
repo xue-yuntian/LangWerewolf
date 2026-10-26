@@ -12,6 +12,16 @@
 这样悍跳、归票、对线这些行为才会自然发生。
 
 ────────────────────────────────────────────────────────────────
+两种来源
+────────────────────────────────────────────────────────────────
+Personality  六种预制风格，靠 seed 分配。离线、可复现、零成本。
+Persona      按用户给的场景现生成，带名字和背景。联网、每局不同。
+             生成失败时回落到 Personality（见 agents/director.py）。
+
+两者都只描述"这个人怎么说话"，不携带任何身份信息。导演不知道
+牌怎么发，也不该知道——否则人设就成了身份泄漏的通道。
+
+────────────────────────────────────────────────────────────────
 一条边界：人设只管风格，不管策略
 ────────────────────────────────────────────────────────────────
 反例（不要这样写）："你是预言家，所以你绝不公布验人结果。"
@@ -34,6 +44,8 @@
 from collections.abc import Sequence
 from enum import StrEnum
 from random import Random
+
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
 # 人设随机流相对发牌随机流的种子偏移。
 # 和 batch.POLICY_SEED_OFFSET 同理：两条流必须互不干涉。
@@ -60,7 +72,7 @@ _TEXT: dict[Personality, str] = {
     Personality.CAUTIOUS: (
         "你偏稳健，不喜欢在信息不足时表态。"
         "你习惯先听完一轮再决定站边，只在手上至少有两个独立依据时才明确指人。"
-        "你的表达偏保守，常说"我再听听"，代价是可能被归为划水。"
+        "你的表达偏保守，常说“我再听听” ，代价是可能被归为划水。"
     ),
     Personality.SUSPICIOUS: (
         "你天生多疑，对每个人的发言都先找漏洞。"
@@ -80,14 +92,71 @@ _TEXT: dict[Personality, str] = {
     Personality.LOW_KEY: (
         "你话不多，习惯点到为止。你不喜欢长篇大论，倾向用一两句话表明立场就收。"
         "你的信息量不一定少，但存在感偏低，容易被忽略、也容易被当成没贡献。"
-        "你需要在关键时刻主动开口，否则好人的票会漏掉。"
+        "你需要在关键时刻主动开口，否则关键的票会漏掉。"
     ),
 }
 
 
-def personality_text(personality: Personality) -> str:
-    """取一段人设描述，直接塞进 prompt。"""
-    return _TEXT[personality]
+# 每个字段的长度上限。模型很爱写小作文：一个人设四百字，九个人就是
+# 三千六，而每个玩家每次调用都要带上自己那份。这个上限不是为了好看。
+_FIELD_LIMITS: dict[str, int] = {
+    "name": 8,
+    "background": 40,
+    "traits": 60,
+    "resilience": 50,
+    "style": 50,
+    "logic": 50,
+    "quirk": 20,
+}
+
+
+class Persona(BaseModel):
+    """一个具体的人。按场景现生成，也可以手写进配置。
+
+    和 Personality 的区别：Personality 是预制的六种风格，靠 seed 分配，
+    同一种子永远是同一种；Persona 带名字和背景，每局可以完全不同。
+
+    所有字段都会被压成单行并截断（_FIELD_LIMITS），所以这里不
+    拒绝超长输入——模型多写两句是常态，拒掉整条才是浪费。
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    name: str
+    traits: str
+    resilience: str
+    style: str
+    logic: str
+    background: str = ""
+    quirk: str = ""
+
+    @field_validator("*")
+    @classmethod
+    def _clip(cls, value: str, info: ValidationInfo) -> str:
+        """压掉换行和超长。字段名不在 _FIELD_LIMITS 里就用 60。"""
+        limit = _FIELD_LIMITS.get(info.field_name or "", 60)
+        return " ".join(value.split())[:limit]
+
+    def to_text(self) -> str:
+        """拼成 prompt 里那一段，字段顺序和生成时的提示词一致。"""
+        head = f"你叫{self.name}。{self.background}".rstrip()
+        lines = [
+            head,
+            f"性格：{self.traits}",
+            f"抗压能力：{self.resilience}",
+            f"说话习惯：{self.style}",
+            f"推理能力：{self.logic}",
+        ]
+        if self.quirk:
+            lines.append(f"口头禅：「{self.quirk}」")
+        return "\n".join(lines)
+
+
+def personality_text(kind: Persona | Personality) -> str:
+    """把人设渲染成一段 prompt 文本。两种来源都走这里。"""
+    if isinstance(kind, Persona):
+        return kind.to_text()
+    return _TEXT[kind]
 
 
 def assign_personalities(

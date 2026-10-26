@@ -76,6 +76,20 @@ def test_vote_never_self() -> None:
             assert target != voter
 
 
+def test_vote_stays_on_pk_stage() -> None:
+    """PK 重投只能投台上的人。
+
+    不照 only 筛的话，随机策略会把台下的人推成最高票，一轮下来
+    有人无缘无故出局——引擎现在会拦，但策略不该靠引擎兜底。
+    """
+    state = make_state({1: Roles.WOLF, 2: Roles.VILLAGER, 3: Roles.VILLAGER, 4: Roles.SEER})
+    policy = RandomPolicy(seed(0))
+
+    picks = {policy.vote(state, 1, only=[2, 3]) for _ in range(50)}
+    assert picks <= {2, 3}
+    assert len(picks) == 2  # 两个候选都该出现，不是“只剩一个才通过”
+
+
 def test_hunter_never_shoots_self() -> None:
     """猎人开枪不能打自己。"""
     state = make_state({1: Roles.WOLF, 2: Roles.HUNTER, 3: Roles.VILLAGER})
@@ -137,3 +151,22 @@ def test_sim_cli_runs(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     assert "第1夜" in out
     assert "胜" in out
+
+
+def test_sim_default_output_hides_god_info(capsys: pytest.CaptureFixture[str]) -> None:
+    """默认输出要能直接给观众看：身份表、刀口、用药、验人都不该出现。"""
+    assert main(["9p", "--seed", "1"]) == 0
+    out = capsys.readouterr().out
+
+    assert "身份：" not in out
+    assert "狼人对" not in out
+    assert "女巫用解药" not in out
+    assert "预言家查验了" not in out
+
+
+def test_sim_god_mode_shows_everything(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["9p", "--seed", "1", "--god"]) == 0
+    out = capsys.readouterr().out
+
+    assert "身份：" in out
+    assert "预言家查验了" in out

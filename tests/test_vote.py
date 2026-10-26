@@ -61,6 +61,20 @@ def test_pk_tie_again_means_nobody_out() -> None:
     assert result.eliminated is None
 
 
+def test_pk_rejects_target_outside_stage() -> None:
+    """PK 轮只能投台上的人。
+
+    不拦的话，台下的票可以全压给一个没上 PK 台的人，让他以
+    “唯一最高票”出局——第一轮他甚至可能一票没得。
+    """
+    state = make_state(LINEUP)
+    first = {1: 2, 2: 3, 3: 2, 4: 3, 5: 4}
+    pk = {1: 5, 4: 2, 5: 3}  # 1 号把票投给了台下的 5 号
+
+    with pytest.raises(RuleViolation, match="PK 轮投了台下的"):
+        resolve_vote(state, ScriptVote(first, pk))
+
+
 def test_all_abstain_means_no_pk() -> None:
     """全员弃票不等于平票，不该进 PK。"""
     state = make_state(LINEUP)

@@ -22,7 +22,7 @@ dev = [
 
 [tool.setuptools]
 # 只把真正的 Python 包纳入安装；web/ 是前端目录，不属于 Python 包
-packages = ["engine", "api", "agents"]
+packages = ["engine", "api", "agents", "llm"]
 
 # ============================================================
 # Ruff：linter + formatter
@@ -53,7 +53,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["engine", "api", "tests"]
+known-first-party = ["engine", "api", "agents", "llm", "tests"]
 
 # ============================================================
 # Mypy：静态类型检查

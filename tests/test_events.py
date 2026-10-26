@@ -87,6 +87,29 @@ def test_every_death_has_event() -> None:
     assert {e.payload["pid"] for e in death_events} == {death.pid for death in game.state.deaths}
 
 
+def test_death_events_do_not_reveal_cause() -> None:
+    """死因不进事件流：被刀还是被毒，得玩家自己从发言和票型里推。
+
+    写进去等于把女巫的用药记录公开——毒杀两个字直接让女巫暴露，
+    而且“谁被刀死的”会让全场跳过“平安夜到底怎么回事”的推理。
+    """
+    game = _play()
+
+    death_events = [e for e in game.events if e.kind is EventKind.DEATH]
+    assert death_events
+    assert all("cause" not in e.payload for e in death_events)
+
+
+def test_public_history_never_mentions_cause() -> None:
+    """拉开每个玩家的公开历史，不能出现“狼刀”“毒杀”。"""
+    from engine.view import view_for
+
+    game = _play()
+    for pid in game.state.players:
+        view = view_for(game.state, game.events, pid)
+        assert all(word not in line for line in view.public_lines for word in ("狼刀", "毒杀"))
+
+
 def test_for_viewer_filters_private_events() -> None:
     """可见性过滤：公共记录里不能出现身份表、狼刀、验人结果。"""
     game = _play()

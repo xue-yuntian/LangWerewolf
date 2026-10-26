@@ -31,6 +31,7 @@ RandomPolicy 是第一个"真正的玩家"，也是 D12 引入 LLM Agent 时替�
 这也是本项目"规则引擎与决策层分离"的实证：换策略不用改规则引擎一行代码。
 """
 
+from collections.abc import Sequence
 from random import Random
 
 from engine.roles import Roles
@@ -138,15 +139,20 @@ class RandomPolicy:
     # 白天
     # ------------------------------------------------------------------
 
-    def vote(self, state: GameState, voter: int) -> int | None:
+    def vote(
+        self, state: GameState, voter: int, *, only: Sequence[int] | None = None
+    ) -> int | None:
         """第 voter 号投给谁。
 
         合法候选：所有存活玩家，但**不能是自己**（vote.py 会拦自投）
+        PK 重投时 only 给出台上的人，候选只剩他们——不照着筛的话，
+        随机策略会把台下的人推成最高票，一轮下来有人无缘无故出局。
         返回 None 表示弃票。
         提示：一个能玩得起来的随机策略，应该尽量不弃票；
         全员弃票会让 day 计数虚增，D11 统计局数时会很难看。
         """
-        candidates = [pid for pid in state.alive_ids() if pid != voter]
+        pool = state.alive_ids() if only is None else only
+        candidates = [pid for pid in pool if pid != voter and state.is_alive(pid)]
         return self._pick(candidates)
 
     # ------------------------------------------------------------------

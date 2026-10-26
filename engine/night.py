@@ -26,7 +26,6 @@ class NightChooser(Protocol):
 
     def choose_guard(self, state: GameState) -> int | None:
         """守卫守谁。None 表示空守。"""
-        ...
 
     def choose_wolf_kill(self, state: GameState) -> int | None:
         """狼队刀谁。None 表示空刀。"""

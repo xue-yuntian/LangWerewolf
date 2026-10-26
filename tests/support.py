@@ -9,6 +9,7 @@
 """
 
 from collections import Counter
+from collections.abc import Sequence
 from random import Random
 
 from engine.board import Board, BoardOptions, WinCondition
@@ -80,8 +81,8 @@ class ScriptNight:
 class ScriptVote:
     """按预设映射投票；映射里没有的人弃票。
 
-    传入 pk_mapping 时，同一个人第二次被问到（PK 轮）改用 pk_mapping。
-    这样首轮票型和 PK 票型可以分开写，不会互相覆盖。
+    引擎传了 only（PK 重投）就改用 pk_mapping，首轮票型和 PK 票型
+    可以分开写，不会互相覆盖。
     """
 
     def __init__(
@@ -91,12 +92,12 @@ class ScriptVote:
     ) -> None:
         self.mapping = mapping
         self.pk_mapping = pk_mapping
-        self.seen: set[int] = set()
 
-    def vote(self, state: GameState, voter: int) -> int | None:
-        if voter in self.seen:
+    def vote(
+        self, state: GameState, voter: int, *, only: Sequence[int] | None = None
+    ) -> int | None:
+        if only is not None:
             return (self.pk_mapping or self.mapping).get(voter)
-        self.seen.add(voter)
         return self.mapping.get(voter)
 
 
@@ -141,7 +142,15 @@ class FirstAlivePolicy:
             return None
         return _first_alive_other(state, seer)
 
-    def vote(self, state: GameState, voter: int) -> int | None:
+    def vote(
+        self, state: GameState, voter: int, *, only: Sequence[int] | None = None
+    ) -> int | None:
+        # PK 重投时只能投台上的人：无脑策略也得照着这个约束选
+        if only is not None:
+            for pid in only:
+                if pid != voter and state.is_alive(pid):
+                    return pid
+            return None
         return _first_alive_other(state, voter)
 
     def hunter_shot(self, state: GameState, hunter: int) -> int | None:

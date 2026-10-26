@@ -7,9 +7,10 @@
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from engine.board import Board
 from engine.events import VIS_ALL, VIS_WOLVES, Event, EventKind, EventLog, vis_pid
 from engine.roles import ROLE_REGISTRY, Faction, Roles
-from engine.state import GameState
+from engine.state import Death, DeathCause, GameState
 
 # 身份说明直接喂给模型，写的是"能做什么 + 规则限制 + 白天怎么打"
 roles_ability: dict[Roles, str] = {}
@@ -60,7 +61,6 @@ roles_ability[Roles.GUARD] = (
 # 术语表：模型读事件流和别人的发言时会遇到这些词。
 # 只描述本局真实存在的规则；没实现的机制要写明"没有"，否则模型会照网杀套路乱用。
 glossary: dict[str, str] = {}
-
 # ---------------- 夜晚 ----------------
 glossary["夜晚顺序"] = (
     "每一夜的结算顺序固定为：守卫 → 狼人 → 女巫 → 预言家 → 结算死亡。"
@@ -118,16 +118,81 @@ glossary["抗推"] = "被推上票台、快要被投出去的人。"
 glossary["倒钩"] = "狼人故意站到真预言家或好人这边，骗取信任后再翻脸。"
 glossary["深水狼"] = "藏得很深、发言跟好人几乎没区别的狼。"
 
-# ---------------- 本版本没有的机制：写出来是为了让模型不要尝试 ----------------
-glossary["警长"] = "D8 才实现的角色。当前版本没有警长竞选，也没有 1.5 票。"
-glossary["警徽流"] = "警长临死前用警徽指示验人顺序的约定。没有警长，所以不存在。"
-glossary["自爆"] = "狼人白天公开身份、直接结束当天的操作。当前版本未实现。"
-glossary["发言记录"] = "当前版本还没有发言记录，只能根据夜间动作和投票判断局势。"
+# ---------------- 本版本没有的机制：不发给模型 ----------------
+# 警长竞选和自爆都没实现，写了只会诱导模型去用。本局配了哪些角色
+# 由 setup_text 负责说明，术语表不需要兼这个职。
+
+# 哪些术语发给谁：拆开之后每次调用只发本角色真正用得上的，
+# 而不是把 36 条全塞进去。9p 没有守卫，空守/连守/同守同救三条
+# 对任何人都没有意义。
+
+# 所有人都要懂：一是自己会用（狼刀、弃票、PK），二是听别人说要用
+# （金水、查杀、银水、起跳这些是别人发言里的词，听不懂就没法判断局势）
+_COMMON_TERMS: tuple[str, ...] = (
+    "夜晚顺序",
+    "狼刀",
+    "自刀",
+    "空刀",
+    "金水",
+    "查杀",
+    "验人链",
+    "银水",
+    "弃票",
+    "平票",
+    "PK",
+    "再平票",
+    "屠边",
+    "屠城",
+    "起跳",
+    "对跳",
+    "悍跳",
+    "归票",
+    "踩",
+    "保",
+    "划水",
+    "抿身份",
+    "狼坑",
+    "抗推",
+    "倒钩",
+    "深水狼",
+)
+
+# 只有这个角色自己用得上的：别人说了也影响不到你的动作
+_ROLE_TERMS: dict[Roles, tuple[str, ...]] = {
+    Roles.GUARD: ("空守", "连守", "同守同救"),
+    Roles.WITCH: ("解药", "毒药"),
+    Roles.SEER: ("查验",),
+    Roles.HUNTER: ("开枪",),
+    Roles.WOLF: (),
+    Roles.VILLAGER: (),
+}
 
 
-def glossary_text() -> str:
-    """把术语表拼成 prompt 里的一段纯文本。"""
-    return "\n".join(f"- {term}：{desc}" for term, desc in glossary.items())
+def terms_text(role: Roles) -> str:
+    """这个角色用得上的术语，拼成一段纯文本。
+
+    按角色裁而不是按板子裁：预言家的“查验”要发给预言家，
+    但“金水”必须发给所有人——那是听别人说话时要用的词。
+    """
+    names = _COMMON_TERMS + _ROLE_TERMS.get(role, ())
+    return "\n".join(f"- {name}：{glossary[name]}" for name in names)
+
+
+def setup_text(board: Board) -> str:
+    """本局有哪些身份、各几个，以及没有哪些。
+
+    必须写进 prompt：术语表和能力说明是全局的，里面提到守卫、警长
+    这些本局可能根本没上场的角色。不明确说“没有”，模型会照着术语表
+    悍跳一个不存在的身份——它没有别的办法知道这局到底配了什么。
+    """
+    present = "\n".join(
+        f"- {ROLE_REGISTRY[role].name_zh} {count} 人" for role, count in board.roles.items()
+    )
+    absent = [spec.name_zh for role, spec in ROLE_REGISTRY.items() if role not in board.roles]
+    text = f"本局身份配置：\n{present}"
+    if absent:
+        text += f"\n本局没有：{'、'.join(absent)}。不要声称自己是其中任何一个角色。"
+    return text
 
 
 def _join_pids(pids: Iterable[int]) -> str:
@@ -136,8 +201,23 @@ def _join_pids(pids: Iterable[int]) -> str:
 
 
 def _join_dead(dead: Iterable[tuple[int, str]]) -> str:
-    """死者和死因拼成「1号（第2夜 被狼刀）」。"""
+    """死者和死法拼成「1号（第2夜）」「3号（第1天 投票）」。"""
     return "、".join(f"{pid}号（{reason}）" for pid, reason in dead) or "无"
+
+
+def death_text(death: Death) -> str:
+    """死者在公开信息里的写法。
+
+    夜里怎么死的（被刀还是被毒）不能写。知道有人被毒杀，就等于知道
+    女巫出过手——而她要不要认下这个动作本身就是策略。白天被投出去、
+    被猎人带走是公开事件（VOTE_RESULT / HUNTER_SHOT 全场可见），照写。
+
+    代价是猎人不知道自己死于毒。规则本来就如此：他仍然会尝试开枪，
+    由 collect_hunter_shot 按死因拒掉。
+    """
+    if death.cause is DeathCause.WOLF_KILL or death.cause is DeathCause.POISON:
+        return death.label
+    return f"{death.label} {cause_text(death.cause.value)}"
 
 
 def _join_lines(lines: Iterable[str]) -> str:
@@ -155,7 +235,8 @@ _CAUSE_TEXT: dict[str, str] = {
     "wolf_kill": "狼刀",
     "poison": "毒杀",
     "vote": "投票",
-    "shot": "开枪",
+    # 不带“被”字会被读成“这个人开的枪”，死因是“死于枪”不是“开了枪”
+    "shot": "枪杀",
 }
 
 
@@ -232,8 +313,8 @@ def render_event(event: Event) -> str | None:
         dead_pid = _get_int(payload, "pid")
         if dead_pid is None:
             return None
-        cause = cause_text(_get_str(payload, "cause") or "")
-        return f"{label}：{dead_pid} 号出局（{cause}）"
+        # 不写死因：被刀还是被毒要玩家自己推，写出来等于替他们推理
+        return f"{label}：{dead_pid} 号出局"
 
     if event.kind is EventKind.HUNTER_SHOT:
         hunter = _get_int(payload, "hunter")
@@ -259,8 +340,13 @@ def render_event(event: Event) -> str | None:
         return f"{label}：{eliminated} 号被投票出局"
 
     if event.kind is EventKind.SPEECH:
-        # D12 才会发这条。约定 payload 用 text 字段。
-        return _get_str(payload, "text")
+        # 发言不进公开历史（split_history 会跳过），但渲染本身要完整：
+        # 不带座位号的话，任何调 render_event 的地方都只能拿到一句无主的话。
+        speaker = _get_int(payload, "pid")
+        text = _get_str(payload, "text")
+        if speaker is None or text is None:
+            return None
+        return f"{label}：{speaker} 号：{text}"
 
     return None
 
@@ -275,6 +361,7 @@ def split_history(
     pid: int,
     *,
     is_wolf: bool = False,
+    since_seq: int = -1,
 ) -> tuple[list[str], list[str]]:
     """切出 (private_lines, public_lines)。
 
@@ -289,13 +376,16 @@ def split_history(
       2. is_wolf=True 时要把 "wolves" 加进观众集合。WOLF_KILL 的
          visible_to 是 "wolves"，和 "pid:N" 匹配不上——只传 pid 的话，
          狼会看不到自己队伍昨晚刀了谁。
+
+    since_seq 只保留这一轮的事件：早先的详细记录已经被模型自己的笔记
+    取代（每次调用都把全程历史重发一遍，prompt 会随天数线性膨胀）。
     """
     audiences: set[str] = {VIS_ALL, vis_pid(pid)}
     if is_wolf:
         audiences.add(VIS_WOLVES)
 
-    visible = events.for_audiences(audiences)
-    public = events.for_audiences({VIS_ALL})
+    visible = [e for e in events.for_audiences(audiences) if e.seq >= since_seq]
+    public = [e for e in events.for_audiences({VIS_ALL}) if e.seq >= since_seq]
     public_seqs = {event.seq for event in public}
 
     private_lines: list[str] = []
@@ -308,6 +398,12 @@ def split_history(
 
     public_lines: list[str] = []
     for event in public:
+        # 发言不进公开历史：同样的内容由 last_speeches 单独发（那里带座位号，
+        # 而且就是一整天的）。两份并存的代价是每次调用多几百字，信息量却
+        # 一模一样，而且公开历史那份还不带说话人。
+        # 公开历史只留“实际发生了什么”：投票、出局、开枪、PK 结果。
+        if event.kind is EventKind.SPEECH:
+            continue
         text = render_event(event)
         if text is not None:
             public_lines.append(text)
@@ -324,10 +420,11 @@ class PlayerView:
     dead: list[tuple[int, str]]
     teammates: list[int]  # 狼队友；非狼返回空
     private_lines: list[str]  # 只有他知道的（验人结果、用药、狼刀）
-    public_lines: list[str]  # 全场可见的历史
+    public_lines: list[str]  # 全场可见的行为记录（投票、出局），不含发言
     last_speeches: list[str]  # 上一轮发言（D12 之后才有）
     personality: str  # 角色设定，由开局之前的用户设定生成
     notes: list[str]  # 玩家笔记
+    setup: str = ""  # 本局身份配置，全局不变，所以带默认值方便测试构造
 
     def to_prompt_text(self) -> str:
         # 用 blocks + join 拼，段落之间固定空一行；空字段直接不产生段落
@@ -337,9 +434,15 @@ class PlayerView:
 
         blocks = [
             intro,
+            # 座位号必须写在这里，不能只靠各个任务段自己补：
+            # 模型不知道自己几号，就无法守自己、无法避开自投，
+            # 也读不懂“谁在跟自己对话”。术语跟身份写在一起，
+            # 从此不再单独占一段。
+            f"你是 {self.pid} 号玩家。\n"
             f"你的身份是：{ROLE_REGISTRY[self.roles].name_zh}（{self.roles}）\n"
-            f"你的能力是：{roles_ability[self.roles]}",
-            "以下是游戏术语的解释：\n" + glossary_text(),
+            f"你的能力是：{roles_ability[self.roles]}\n"
+            f"相关术语：\n{terms_text(self.roles)}",
+            self.setup,
             f"当前是第{self.day}天，以下是你知道的玩家信息：\n"
             f"存活玩家：{_join_pids(self.alive)}\n"
             f"死亡玩家：{_join_dead(self.dead)}",
@@ -354,8 +457,29 @@ class PlayerView:
             blocks.append("以下是你自己的笔记：\n" + _join_lines(self.notes))
         if self.last_speeches:
             blocks.append("以下是本轮已经发生过的发言：\n" + _join_lines(self.last_speeches))
-        blocks.append("注意，你的发言不能冗长，必须简明说明你想讲出的逻辑和结论。没有有效信息时可以选择过。")
-        return "\n\n".join(blocks)
+        blocks.append(
+            "注意，你的发言不能冗长，必须简明说明你想讲出的逻辑和结论。没有有效信息时可以选择过。"
+        )
+        return "\n\n".join(block for block in blocks if block)
+
+
+def round_start_seq(events: EventLog, night: int) -> int:
+    """第 night 夜的起点 seq。用它把 prompt 裁到“只含当前这一轮”。
+
+    夜间结算前 NIGHT_START 还没发，返回 len(events)——等于什么都不留：
+    那时的玩家本来也只有自己的笔记可看。
+
+    夜间决策时 state.night 还是“上一夜”（它记录的是已经过完的夜晚数），
+    所以会多带一整轮。这是有意的取舍：判断“当前是第几夜”需要知道
+    NIGHT_START 发没发，而夜间和白天共用同一个入口；多带一轮是常数开销，
+    总比把整局重发一遍强。
+    """
+    for event in events:
+        if event.kind is EventKind.NIGHT_START and event.label == f"第{night}夜":
+            return event.seq
+    # night == 0 表示第一夜还没结算，本来就没有“上一轮”可裁，
+    # 返回 -1 才能保住已有的私有事件（测试里手搭的事件流没有 NIGHT_START）
+    return -1 if night <= 0 else len(events)
 
 
 def view_for(
@@ -366,35 +490,37 @@ def view_for(
     personality: str = "",
     notes: list[str] | None = None,
     last_speeches: list[str] | None = None,
+    since_seq: int = -1,
 ) -> PlayerView:
     """把引擎状态压缩成"pid 这一刻知道什么"。
 
     只读，不回写 state。这是全项目唯一的信息出口——D12 拼 prompt
     只允许从这里取数据，不允许直接读 GameState，否则私有信息会漏。
+
+    since_seq 由调用方用 round_start_seq 算：只带当前这一轮的历史，
+    更早的靠笔记。不裁的话一次调用会把整局重发一遍。
     """
     role = state.player(pid).role
     is_wolf = ROLE_REGISTRY[role].faction is Faction.WOLF
 
     # 狼队友：包含已死的狼。狼从开局就知道彼此身份，队友死了也仍然知道。
     teammates = (
-        [other for other in state.role_holders(Roles.WOLF) if other != pid]
-        if is_wolf
-        else []
+        [other for other in state.role_holders(Roles.WOLF) if other != pid] if is_wolf else []
     )
 
-    # 死者要带上"第几夜 + 死因"。只给座位号不够——模型要靠死因推理
-    # （被毒死的不能开枪、被刀死的可能被救过）。
-    dead = [
-        (death.pid, f"{death.label} {cause_text(death.cause.value)}")
-        for death in state.deaths
-    ]
+    # 死者只给“第几夜 + 公开死法”。夜里被刀还是被毒不能写：毒杀两个字
+    # 等于替女巫承认她出过手，而她要不要说这件事是她的策略。
+    dead = [(death.pid, death_text(death)) for death in state.deaths]
 
-    private_lines, public_lines = split_history(events, pid, is_wolf=is_wolf)
+    private_lines, public_lines = split_history(events, pid, is_wolf=is_wolf, since_seq=since_seq)
 
     return PlayerView(
         pid=pid,
         roles=role,
-        day=state.day,
+        # 不能用 state.day：发言发生在 resolve_vote 之前，那时 day 还没 +1，
+        # 第 N 天的发言会写成“第 N-1 天”（第一天就是“第0天”）。
+        # night 在夜里和白天都等于当前轮号，开局前兜到 1。
+        day=max(state.night, 1),
         alive=state.alive_ids(),
         dead=dead,
         teammates=teammates,
@@ -403,4 +529,5 @@ def view_for(
         last_speeches=list(last_speeches or []),
         personality=personality,
         notes=list(notes or []),
+        setup=setup_text(state.board),
     )

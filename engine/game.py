@@ -9,6 +9,7 @@ D4 让它能跑通，D6 让它**每一件发生的事都留下一条带序号的
   · 不做发言（D8 / D12 才有数据源）
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from random import Random
 from typing import Protocol
@@ -75,9 +76,15 @@ def _holder_pid(state: GameState, role: Roles) -> int | None:
 
 
 def _emit_deaths(events: EventLog, deaths: list[Death], label: str) -> None:
-    """死亡是全场可见事件——所有人都看到谁出局了。"""
+    """死亡是全场可见——所有人都看到谁出局了。
+
+    但死因不写进事件：被狼刀还是被毒，要靠玩家自己从「谁有动机、
+    谁透露过用药」推出来。写进去等于把女巫的用药记录公开，而且
+    一旦有人被毒死，“毒杀”两个字直接把女巫暴露了。
+    上帝视角的死因在 NightResult / state.deaths 里，复盘渲染用得到。
+    """
     for death in deaths:
-        events.emit(EventKind.DEATH, label, pid=death.pid, cause=death.cause.value)
+        events.emit(EventKind.DEATH, label, pid=death.pid)
 
 
 def _emit_night(events: EventLog, night: NightResult, state: GameState) -> None:
@@ -130,9 +137,11 @@ def _emit_night(events: EventLog, night: NightResult, state: GameState) -> None:
 
 
 def _emit_vote(events: EventLog, vote: VoteResult) -> None:
-    """把一天的投票拆成事件。"""
+    """把一天的投票拆成事件。
+
+    DAY_START 不在这里发：白天从发言就开始了，它必须发在 SPEECH 之前。
+    """
     label = vote.label
-    events.emit(EventKind.DAY_START, label)
 
     # 每人一票，前端画投票矩阵直接读这些
     for voter, target in sorted(vote.ballots.items()):
@@ -157,11 +166,65 @@ def _emit_vote(events: EventLog, vote: VoteResult) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _collect_speeches(
+    events: EventLog,
+    state: GameState,
+    policy: GamePolicy,
+    label: str,
+    on_step: Callable[[str], None] | None = None,
+) -> None:
+    """白天发言：按座位号升序，一人一次，说完立刻入流。
+
+    speak 不在 GamePolicy 协议里——随机策略不会说话，引擎不能因此崩掉，
+    所以用 getattr 探测。说完立刻 emit 而不是攒完再发：
+    后面发言的人必须能在事件流里看到前面的人说了什么。
+
+    发言内容直接走 on_step：发言比结算更能看出这局在发生什么，
+    只报“谁出局了”会把整场讨论咽掉。
+    """
+    speak = getattr(policy, "speak", None)
+    if not callable(speak):
+        return
+
+    for pid in state.alive_ids():
+        text = speak(state, pid)
+        if not text:
+            continue
+        events.emit(EventKind.SPEECH, label, pid=pid, text=text)
+        if on_step is not None:
+            on_step(f"[{label}] {pid} 号：{text}")
+
+
+def _collect_notes(
+    state: GameState,
+    policy: GamePolicy,
+    label: str,
+    on_step: Callable[[str], None] | None = None,
+) -> None:
+    """一天结束后，让还活着的人各写一条笔记。
+
+    写在这里而不是发言时：此刻投票和出局都已经发生，总结才完整。
+    笔记是旧历史被裁掉之后唯一的记忆载体（view.round_start_seq 只留
+    当前这一轮），所以这步不能省——写了才换得到明天的上下文预算。
+
+    note 和 speak 一样是可选钩子：随机策略不写笔记，引擎不能因此崩掉。
+    """
+    write = getattr(policy, "note", None)
+    if not callable(write):
+        return
+
+    for pid in state.alive_ids():
+        text = write(state, pid, label=label)
+        if text and on_step is not None:
+            on_step(f"[{label}] {pid} 号笔记：{text}")
+
+
 def play_game(
     board: Board,
     policy: GamePolicy,
     rng: Random,
     max_days: int = DEFAULT_MAX_DAYS,
+    on_step: Callable[[str], None] | None = None,
 ) -> GameResult:
     """跑完一局，返回结果。
 
@@ -170,6 +233,8 @@ def play_game(
         policy: 所有决策的来源
         rng: 显式传入，便于用 Random(42) 复现同一局
         max_days: 安全上限
+        on_step: 每夜/每天结算后的进度回调。LLM 策略一局要跑几分钟，
+                 CLI 靠它流式打印；None 时零开销，引擎不关心展示
     """
     # 警长竞选是 D8 的内容。这里显式拒绝，而不是静默忽略，
     # 否则 12 人局会"看起来能跑但少了整个上警流程"，属于最难查的那种 bug。
@@ -179,6 +244,13 @@ def play_game(
     state = create_state(board, rng)
     result = GameResult(winner=Winner.GOOD, state=state)  # winner 会被覆盖
     events = result.events
+
+    # 需要读历史的策略（D12 的 LLMAgentPolicy）用可选钩子接住事件流。
+    # 不把 events 加进 7 个策略方法签名：那会污染 GamePolicy 协议，
+    # 也会逼着 RandomPolicy 收一个它根本用不到的参数。
+    attach = getattr(policy, "attach_events", None)
+    if callable(attach):
+        attach(events)
 
     # 身份表是上帝视角，绝不能进公共记录（D12 会按 visible_to 过滤）
     events.emit(
@@ -216,15 +288,28 @@ def play_game(
         result.nights.append(night)
         _emit_night(events, night, state)
         drain_shots(night.label)
+        if on_step is not None:
+            # 只报出局结果，不报狼刀是谁：on_step 是公开进度流，
+            # 报出刀口等于把夜间底牌给所有人看
+            gone = "、".join(f"{death.pid}号" for death in night.deaths) or "无"
+            on_step(f"[{night.label}] 出局：{gone}")
 
         winner = check_winner(state)
         if winner is not None:
             break
 
-        # ---- 白天投票 ----
+        # ---- 白天：发言 -> 投票 ----
+        # 发言在 resolve_vote 之前，此时 state.day 还没 +1，所以标签要自己 +1
+        day_label = f"第{state.day + 1}天"
+        events.emit(EventKind.DAY_START, day_label)
+        _collect_speeches(events, state, policy, day_label, on_step)
+
         vote = resolve_vote(state, policy)
         result.votes.append(vote)
         _emit_vote(events, vote)
+        if on_step is not None:
+            out = f"{vote.eliminated}号出局" if vote.eliminated is not None else "无人出局"
+            on_step(f"[{vote.label}] 投票：{out}")
 
         if vote.eliminated is not None:
             deaths = apply_deaths(
@@ -237,6 +322,9 @@ def play_game(
             drain_shots(vote.label)
 
         winner = check_winner(state)
+        if winner is None:
+            # 已经分出胜负就不写了：最后一轮的笔记没有人会读到，白花一次调用
+            _collect_notes(state, policy, vote.label, on_step)
 
     if winner is None:  # 仅为让类型收窄，逻辑上不可达
         raise RuntimeError("胜负判定异常：循环退出但没有胜方")
